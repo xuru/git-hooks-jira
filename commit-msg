@@ -1,0 +1,97 @@
+#!/usr/bin/env python
+
+import distutils.spawn
+import re
+import sys
+import os.path
+
+if not '/usr/local/lib/python2.7/site-packages' in sys.path:
+    sys.path.insert(0, '/usr/local/lib/python2.7/site-packages')
+
+if not '/Library/Python/2.7/site-packages' in sys.path:
+    sys.path.insert(0, '/Library/Python/2.7/site-packages')
+
+try:
+    from jira.client import JIRA
+except ImportError:
+    print "[ERROR] In order to commit code with this hook you will need to install the jira-python package:"
+    print "  pip install jira-python"
+    print
+    sys.exit(1)
+
+from subprocess import Popen, PIPE  # , call
+
+GIT_PATH = distutils.spawn.find_executable('git')
+TICKET_REGEXP = re.compile(r"(?P<ticket>[A-Z]+-\d+)", re.MULTILINE)    # WEB-12345
+commit_message = open(sys.argv[1], 'r').read()
+
+def init():
+    username, password = get_creds()
+    if not username or not password:
+        print "Must setup your jira username and password with git config: "
+        print "  git config --global jira.username harry"
+        print "  git config --global jira.password potter"
+        sys.exit(1)
+
+    options = {
+        'server': 'http://jira.domain.com'
+    }
+    jira = JIRA(options, basic_auth=(username, password))
+    return jira
+
+def get_creds():
+    for line in call_git('config', ['--list']).split('\n'):
+        if 'jira.username' in line:
+            jira_username = line.split('=')[1]
+        elif 'jira.password' in line:
+            jira_password = line.split('=')[1]
+    return (jira_username, jira_password)
+
+
+def issue_exists(issue):
+    try:
+        issue = jira.issue(issue)
+        return True
+    except:
+        pass
+    return False
+
+
+def remove_comments(string):
+    return re.sub(re.compile("^#.*", re.MULTILINE), "", string)
+
+
+def get_branch():
+    branch_name = None
+    for branch in call_git('branch', ['--no-color']).split('\n'):
+        if branch.startswith('*'):
+            branch_name = branch.split()[1]
+    return branch_name
+
+
+## call git in command line
+def call_git(command, args, input=None):
+    return Popen([GIT_PATH, command] + args, stdin=PIPE, stdout=PIPE).communicate(input)[0]
+
+
+jira = init()
+
+ticket = None
+stripped_msg = remove_comments(commit_message)
+match = TICKET_REGEXP.search(stripped_msg)
+if match:
+    ticket = match.group('ticket')
+
+branch_name = get_branch()
+if ticket is None:
+    match = TICKET_REGEXP.search(branch_name)
+    if match:
+        ticket = match.group('ticket')
+        commit_message = "Branch: {}\nJira Ticket: [{}]\n\n".format(branch_name, ticket) + stripped_msg
+
+if ticket and issue_exists(ticket):
+    jira.add_comment(ticket, commit_message)
+else:
+    print "[ERROR] commit-message-format: JIRA ticket number does not exist."
+    sys.exit(1)
+sys.exit(0)

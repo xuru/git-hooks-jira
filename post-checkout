@@ -1,0 +1,87 @@
+#!/usr/bin/env python
+
+import distutils.spawn
+import sys
+import re
+
+
+if '/usr/local/lib/python2.7/site-packages' not in sys.path:
+    sys.path.insert(0, '/usr/local/lib/python2.7/site-packages')
+
+
+if '/Library/Python/2.7/site-packages' not in sys.path:
+    sys.path.insert(0, '/Library/Python/2.7/site-packages')
+
+
+from jira.client import JIRA
+from subprocess import Popen, PIPE  # , call
+
+GIT_PATH = distutils.spawn.find_executable('git')
+TICKET_REGEXP = re.compile(r"(?P<ticket>[A-Z]+-\d+)")    # WEB-12345
+
+
+# call git in command line
+def call_git(command, args, input=None):
+    return Popen([GIT_PATH, command] + args, stdin=PIPE, stdout=PIPE).communicate(input)[0]
+
+
+def get_creds():
+    for line in call_git('config', ['--list']).split('\n'):
+        if 'jira.username' in line:
+            jira_username = line.split('=')[1]
+        elif 'jira.password' in line:
+            jira_password = line.split('=')[1]
+    return (jira_username, jira_password)
+
+
+def issue_exists(issue):
+    try:
+        issue = jira.issue(issue)
+        return True
+    except:
+        pass
+    return False
+
+
+def start_progress(name):
+    if issue_exists(name):
+        issue = jira.issue(name)
+        transitions = jira.transitions(issue)
+        start_id = None
+
+        for trans in transitions:
+            if trans['name'] == 'Start Progress':
+                start_id = trans['id']
+
+        if not start_id:
+            return
+
+        jira.transition_issue(issue, start_id)
+
+
+def get_branch():
+    branch_name = None
+    for branch in call_git('branch', ['--no-color']).split('\n'):
+        if branch.startswith('*'):
+            branch_name = branch.split()[1]
+    return branch_name
+
+
+username, password = get_creds()
+if not username or not password:
+    print "Must setup your jira username and password with git config: "
+    print "  git config --global jira.username harry"
+    print "  git config --global jira.password potter"
+    sys.exit(1)
+
+options = {
+    'server': 'http://jira.domain.com'
+}
+
+branch_name = get_branch()
+if branch_name:
+    match = TICKET_REGEXP.search(branch_name)
+    if match:
+        ticket = match.group('ticket')
+        jira = JIRA(options, basic_auth=(username, password))
+        start_progress(ticket)
